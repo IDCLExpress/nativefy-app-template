@@ -1,236 +1,135 @@
-# =============================================================================
-# NATIVEFY - Web to Native App Builder
-# Production-Quality Codemagic Configuration
-# =============================================================================
-
-definitions:
-  environment: &environment
-    groups:
-      - nativefy_credentials
-    vars:
-      FLUTTER_VERSION: "stable"
-      XCODE_VERSION: "latest"
-      COCOAPODS_VERSION: "1.14.3"
-      NODE_VERSION: "20.10.0"
-
-  cache: &cache
-    cache_paths:
-      - $HOME/.npm
-      - $HOME/.gradle/caches
-      - $HOME/Library/Caches/CocoaPods
-      - node_modules
-      - android/.gradle
-      - ios/Pods
-
-  triggering: &triggering
-    events:
-      - push
-      - pull_request
-      - tag
-    branch_patterns:
-      - pattern: 'main'
-        include: true
-      - pattern: 'release/*'
-        include: true
-    cancel_previous_builds: true
-
 workflows:
   android-workflow:
-    name: "Android Production Build"
+    name: Android Build
     instance_type: linux_x2
     max_build_duration: 60
-    <<: *environment
     environment:
       java: 17
       node: 20
-      vars:
-        APP_NAME: ${APP_NAME}
-        SOURCE_URL: ${SOURCE_URL}
-        BUNDLE_ID: ${BUNDLE_ID}
-        PLATFORM: "android"
     cache:
-      <<: *cache
+      cache_paths:
+        - $HOME/.npm
+        - $HOME/.gradle/caches
     scripts:
-      - name: "Validate build parameters"
+      - name: Validate parameters
         script: |
-          echo "NATIVEFY - Android Build Starting"
-          echo "App Name: $APP_NAME"
-          echo "Source URL: $SOURCE_URL"
+          if [ -z "$APP_NAME" ] || [ -z "$SOURCE_URL" ] || [ -z "$BUNDLE_ID" ]; then
+            echo "Error: Required parameters missing"
+            echo "APP_NAME: $APP_NAME"
+            echo "SOURCE_URL: $SOURCE_URL"
+            echo "BUNDLE_ID: $BUNDLE_ID"
+            exit 1
+          fi
+          echo "Building: $APP_NAME"
+          echo "Source: $SOURCE_URL"
           echo "Bundle ID: $BUNDLE_ID"
-          if [ -z "$SOURCE_URL" ]; then echo "ERROR: SOURCE_URL is required"; exit 1; fi
-          if [ -z "$APP_NAME" ]; then echo "ERROR: APP_NAME is required"; exit 1; fi
-          echo "All parameters validated"
 
-      - name: "Install Node.js dependencies"
-        script: |
-          npm ci --prefer-offline --no-audit
+      - name: Install dependencies
+        script: npm ci
 
-      - name: "Configure app identity"
+      - name: Configure Capacitor
         script: |
           cat > capacitor.config.ts << EOF
-          import { CapacitorConfig } from '@capacitor/cli';
+          import type { CapacitorConfig } from '@capacitor/cli';
           const config: CapacitorConfig = {
-            appId: '${BUNDLE_ID}',
-            appName: '${APP_NAME}',
+            appId: '$BUNDLE_ID',
+            appName: '$APP_NAME',
             webDir: 'dist',
-            server: { url: '${SOURCE_URL}', cleartext: true, androidScheme: 'https', allowNavigation: ['*'] },
-            android: { allowMixedContent: true, captureInput: true, webContentsDebuggingEnabled: false },
-            plugins: {
-              SplashScreen: { launchShowDuration: 2000, launchAutoHide: true, backgroundColor: '#ffffff', showSpinner: false, splashFullScreen: true, splashImmersive: true },
-              StatusBar: { style: 'dark', backgroundColor: '#ffffff' },
-              Keyboard: { resize: 'body', resizeOnFullScreen: true }
+            server: {
+              url: '$SOURCE_URL',
+              cleartext: true
             }
           };
           export default config;
           EOF
 
-      - name: "Update Android resources"
+      - name: Update Android resources
         script: |
-          mkdir -p android/app/src/main/res/values
-          cat > android/app/src/main/res/values/strings.xml << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">${APP_NAME}</string>
-              <string name="title_activity_main">${APP_NAME}</string>
-              <string name="package_name">${BUNDLE_ID}</string>
-          </resources>
-          EOF
+          sed -i "s/<string name=\"app_name\">.*<\/string>/<string name=\"app_name\">$APP_NAME<\/string>/" android/app/src/main/res/values/strings.xml
 
-      - name: "Build web assets"
+      - name: Build web assets
         script: npm run build
 
-      - name: "Sync Capacitor"
-        script: npx cap sync android --deployment
+      - name: Sync Capacitor
+        script: npx cap sync android
 
-      - name: "Build Android APK"
+      - name: Build Android
         script: |
           cd android
-          ./gradlew assembleRelease -Dorg.gradle.jvmargs="-Xmx4g" -Dorg.gradle.parallel=true --no-daemon
-
-      - name: "Build Android AAB"
-        script: |
-          cd android
-          ./gradlew bundleRelease -Dorg.gradle.jvmargs="-Xmx4g" -Dorg.gradle.parallel=true --no-daemon
+          ./gradlew assembleRelease
+          ./gradlew bundleRelease
 
     artifacts:
-      - android/app/build/outputs/apk/release/*.apk
-      - android/app/build/outputs/bundle/release/*.aab
-
-    publishing:
-      scripts:
-        - name: "Build complete"
-          script: echo "Android build complete for $APP_NAME"
+      - android/app/build/outputs/apk/**/*.apk
+      - android/app/build/outputs/bundle/**/*.aab
 
   ios-workflow:
-    name: "iOS Production Build"
+    name: iOS Build
     instance_type: mac_mini_m2
     max_build_duration: 90
     integrations:
-      app_store_connect: nativefy_asc
+      app_store_connect: Nativefy ASC
     environment:
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: ${BUNDLE_ID}
+        bundle_identifier: $BUNDLE_ID
       xcode: latest
       node: 20
-      cocoapods: 1.14.3
-      vars:
-        APP_NAME: ${APP_NAME}
-        SOURCE_URL: ${SOURCE_URL}
-        BUNDLE_ID: ${BUNDLE_ID}
-        PLATFORM: "ios"
+      cocoapods: default
     cache:
-      <<: *cache
+      cache_paths:
+        - $HOME/.npm
+        - ios/Pods
     scripts:
-      - name: "Validate parameters"
+      - name: Validate parameters
         script: |
-          echo "NATIVEFY - iOS Build Starting"
-          echo "App Name: $APP_NAME"
-          echo "Source URL: $SOURCE_URL"
-          echo "Bundle ID: $BUNDLE_ID"
-          if [ -z "$SOURCE_URL" ]; then echo "ERROR: SOURCE_URL is required"; exit 1; fi
-          if [ -z "$APP_NAME" ]; then echo "ERROR: APP_NAME is required"; exit 1; fi
+          if [ -z "$APP_NAME" ] || [ -z "$SOURCE_URL" ] || [ -z "$BUNDLE_ID" ]; then
+            echo "Error: Required parameters missing"
+            exit 1
+          fi
+          echo "Building: $APP_NAME for iOS"
 
-      - name: "Install dependencies"
-        script: npm ci --prefer-offline --no-audit
+      - name: Install dependencies
+        script: npm ci
 
-      - name: "Configure app identity"
+      - name: Configure Capacitor
         script: |
           cat > capacitor.config.ts << EOF
-          import { CapacitorConfig } from '@capacitor/cli';
+          import type { CapacitorConfig } from '@capacitor/cli';
           const config: CapacitorConfig = {
-            appId: '${BUNDLE_ID}',
-            appName: '${APP_NAME}',
+            appId: '$BUNDLE_ID',
+            appName: '$APP_NAME',
             webDir: 'dist',
-            server: { url: '${SOURCE_URL}', cleartext: false, iosScheme: 'https', allowNavigation: ['*'] },
-            ios: { contentInset: 'automatic', allowsLinkPreview: true, scrollEnabled: true, preferredContentMode: 'mobile' },
-            plugins: {
-              SplashScreen: { launchShowDuration: 2000, launchAutoHide: true, backgroundColor: '#ffffff', showSpinner: false, splashFullScreen: true, splashImmersive: true },
-              StatusBar: { style: 'dark' },
-              Keyboard: { resize: 'body', resizeOnFullScreen: true }
+            server: {
+              url: '$SOURCE_URL',
+              cleartext: true
             }
           };
           export default config;
           EOF
 
-      - name: "Build web assets"
+      - name: Build web assets
         script: npm run build
 
-      - name: "Sync Capacitor"
-        script: npx cap sync ios --deployment
+      - name: Sync Capacitor
+        script: npx cap sync ios
 
-      - name: "Install CocoaPods"
+      - name: Install CocoaPods
         script: |
           cd ios/App
-          pod install --repo-update
+          pod install
 
-      - name: "Configure iOS project"
+      - name: Configure iOS project
         script: |
-          cd ios/App
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" App/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_NAME" ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" ios/App/App/Info.plist
 
-      - name: "Set up code signing"
-        script: xcode-project use-profiles
-
-      - name: "Build iOS archive"
+      - name: Build iOS
         script: |
-          cd ios/App
-          xcodebuild archive \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -archivePath build/App.xcarchive \
-            -destination 'generic/platform=iOS' \
-            -allowProvisioningUpdates
-
-      - name: "Export IPA"
-        script: |
-          cd ios/App
-          cat > exportOptions.plist << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>uploadSymbols</key>
-              <true/>
-              <key>compileBitcode</key>
-              <false/>
-          </dict>
-          </plist>
-          EOF
-          xcodebuild -exportArchive \
-            -archivePath build/App.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist exportOptions.plist
+          xcode-project build-ipa \
+            --workspace "ios/App/App.xcworkspace" \
+            --scheme "App"
 
     artifacts:
-      - ios/App/build/ipa/*.ipa
-      - ios/App/build/*.xcarchive
-
-    publishing:
-      scripts:
-        - name: "Build complete"
-          script: echo "iOS build complete for $APP_NAME"
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
