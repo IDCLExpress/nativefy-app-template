@@ -1,21 +1,8 @@
 # =============================================================================
 # NATIVEFY - Web to Native App Builder
-# Production-Quality Codemagic Configuration
-# =============================================================================
-# This configuration creates native iOS and Android apps from any web URL
-# by wrapping them in a high-performance WebView with native capabilities.
 # =============================================================================
 
 definitions:
-  # Shared environment variables
-  environment: &environment
-    vars:
-      FLUTTER_VERSION: "stable"
-      XCODE_VERSION: "latest"
-      COCOAPODS_VERSION: "1.14.3"
-      NODE_VERSION: "20.10.0"
-      
-  # Shared caching configuration for faster builds
   cache: &cache
     cache_paths:
       - $HOME/.npm
@@ -25,157 +12,63 @@ definitions:
       - android/.gradle
       - ios/Pods
 
-  # Shared triggering rules
-  triggering: &triggering
-    events:
-      - push
-      - pull_request
-      - tag
-    branch_patterns:
-      - pattern: 'main'
-        include: true
-      - pattern: 'release/*'
-        include: true
-    cancel_previous_builds: true
-
 workflows:
-  # ===========================================================================
-  # ANDROID WORKFLOW - Production Quality
-  # ===========================================================================
   android-workflow:
-    name: "Android Production Build"
-    instance_type: linux
+    name: "Android Build"
+    instance_type: linux_x2
     max_build_duration: 60
-    
-    <<: *environment
     
     environment:
       java: 17
       node: 20
       vars:
-        # These are passed from our edge function
         APP_NAME: ${APP_NAME}
         SOURCE_URL: ${SOURCE_URL}
         BUNDLE_ID: ${BUNDLE_ID}
-        PLATFORM: "android"
         
     cache:
       <<: *cache
       
     scripts:
-      # -----------------------------------------------------------------------
-      # STEP 1: Validate Environment
-      # -----------------------------------------------------------------------
-      - name: "Validate build parameters"
+      - name: "Validate parameters"
         script: |
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║           NATIVEFY - Android Build Starting                   ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "📱 App Name: $APP_NAME"
-          echo "🌐 Source URL: $SOURCE_URL"
-          echo "📦 Bundle ID: $BUNDLE_ID"
-          echo ""
-          
-          # Validate required variables
-          if [ -z "$SOURCE_URL" ]; then
-            echo "❌ ERROR: SOURCE_URL is required"
+          echo "📱 App: $APP_NAME"
+          echo "🌐 URL: $SOURCE_URL"
+          echo "📦 Bundle: $BUNDLE_ID"
+          if [ -z "$SOURCE_URL" ] || [ -z "$APP_NAME" ]; then
+            echo "❌ Missing required parameters"
             exit 1
           fi
-          
-          if [ -z "$APP_NAME" ]; then
-            echo "❌ ERROR: APP_NAME is required"
-            exit 1
-          fi
-          
-          # Validate URL format
-          if ! echo "$SOURCE_URL" | grep -qE '^https?://'; then
-            echo "❌ ERROR: SOURCE_URL must be a valid HTTP/HTTPS URL"
-            exit 1
-          fi
-          
-          echo "✅ All parameters validated successfully"
+          echo "✅ Parameters validated"
 
-      # -----------------------------------------------------------------------
-      # STEP 2: Install Dependencies
-      # -----------------------------------------------------------------------
-      - name: "Install Node.js dependencies"
+      - name: "Install dependencies"
         script: |
-          echo "📦 Installing dependencies..."
           npm install --legacy-peer-deps
-          echo "✅ Dependencies installed"
 
-      # -----------------------------------------------------------------------
-      # STEP 3: Configure App Identity
-      # -----------------------------------------------------------------------
-      - name: "Configure app identity and branding"
+      - name: "Configure Capacitor"
         script: |
-          echo "🎨 Configuring app identity..."
-          
-          # Update capacitor.config.ts with dynamic values
           cat > capacitor.config.ts << EOF
           import { CapacitorConfig } from '@capacitor/cli';
-          
           const config: CapacitorConfig = {
             appId: '${BUNDLE_ID}',
             appName: '${APP_NAME}',
             webDir: 'dist',
-            bundledWebRuntime: false,
-            
-            // Production server configuration
             server: {
               url: '${SOURCE_URL}',
               cleartext: true,
               androidScheme: 'https',
               allowNavigation: ['*']
             },
-            
-            // Android-specific optimizations
             android: {
               allowMixedContent: true,
-              captureInput: true,
-              webContentsDebuggingEnabled: false,
-              
-              // Splash screen configuration
-              splashScreenSpinnerStyle: 'small',
-              splashScreenSpinnerColor: '#ffffff'
-            },
-            
-            // Plugin configurations
-            plugins: {
-              SplashScreen: {
-                launchShowDuration: 2000,
-                launchAutoHide: true,
-                backgroundColor: '#ffffff',
-                androidSplashResourceName: 'splash',
-                showSpinner: false,
-                splashFullScreen: true,
-                splashImmersive: true
-              },
-              StatusBar: {
-                style: 'dark',
-                backgroundColor: '#ffffff'
-              },
-              Keyboard: {
-                resize: 'body',
-                resizeOnFullScreen: true
-              }
+              captureInput: true
             }
           };
-          
           export default config;
           EOF
-          
-          echo "✅ App identity configured"
 
-      # -----------------------------------------------------------------------
-      # STEP 4: Update Android Resources
-      # -----------------------------------------------------------------------
-      - name: "Update Android app name and resources"
+      - name: "Update Android resources"
         script: |
-          echo "📱 Updating Android resources..."
-          
-          # Update strings.xml with app name
           mkdir -p android/app/src/main/res/values
           cat > android/app/src/main/res/values/strings.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
@@ -186,165 +79,60 @@ workflows:
               <string name="custom_url_scheme">${BUNDLE_ID}</string>
           </resources>
           EOF
-          
-          echo "✅ Android resources updated"
 
-      # -----------------------------------------------------------------------
-      # STEP 5: Build Web Assets
-      # -----------------------------------------------------------------------
-      - name: "Build optimized web assets"
+      - name: "Build web assets"
         script: |
-          echo "🏗️ Building web assets..."
           npm run build
-          echo "✅ Web assets built"
 
-      # -----------------------------------------------------------------------
-      # STEP 6: Sync Capacitor
-      # -----------------------------------------------------------------------
-      - name: "Sync Capacitor to Android"
+      - name: "Sync Capacitor"
         script: |
-          echo "🔄 Syncing Capacitor..."
           npx cap sync android --deployment
-          echo "✅ Capacitor synced"
 
-      # -----------------------------------------------------------------------
-      # STEP 7: Build Android Release
-      # -----------------------------------------------------------------------
-      - name: "Build Android release APK"
+      - name: "Build Android"
         script: |
-          echo "🔨 Building Android release..."
           cd android
-          
-          # Build release APK
           ./gradlew assembleRelease \
-            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m" \
-            -Dorg.gradle.parallel=true \
-            -Dorg.gradle.caching=true \
-            --no-daemon
-          
-          echo "✅ Android APK built successfully"
-
-      # -----------------------------------------------------------------------
-      # STEP 8: Sign APK (auto-generate keystore if not provided)
-      # -----------------------------------------------------------------------
-      - name: "Sign APK with release keystore"
-        script: |
-          echo "🔐 Checking for signing configuration..."
-          
-          APK_PATH="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          SIGNED_APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
-          KEYSTORE_PATH="$HOME/release.keystore"
-          
-          if [ -f "$APK_PATH" ]; then
-            if [ -n "$CM_KEYSTORE" ]; then
-              # User provided their own keystore
-              echo "🔑 Using provided release keystore..."
-              echo "$CM_KEYSTORE" | base64 --decode > "$KEYSTORE_PATH"
-              KEYSTORE_PASS="$CM_KEYSTORE_PASSWORD"
-              KEY_ALIAS="$CM_KEY_ALIAS"
-              KEY_PASS="$CM_KEY_PASSWORD"
-            else
-              # Auto-generate a debug keystore for easy onboarding
-              echo "🔧 Auto-generating signing keystore..."
-              echo "   (For Play Store publishing, add your own keystore later)"
-              
-              # Generate keystore with default values
-              KEYSTORE_PASS="nativefy_auto_${BUNDLE_ID//[^a-zA-Z0-9]/_}"
-              KEY_ALIAS="nativefy"
-              KEY_PASS="$KEYSTORE_PASS"
-              
-              keytool -genkey -v \
-                -keystore "$KEYSTORE_PATH" \
-                -alias "$KEY_ALIAS" \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -storepass "$KEYSTORE_PASS" \
-                -keypass "$KEY_PASS" \
-                -dname "CN=${APP_NAME}, OU=SyncForge, O=Nativefy, L=San Francisco, ST=CA, C=US"
-              
-              echo "✅ Auto-generated keystore for testing/sideloading"
-            fi
-            
-            # Sign the APK
-            echo "🔑 Signing APK..."
-            jarsigner -verbose \
-              -sigalg SHA256withRSA \
-              -digestalg SHA-256 \
-              -keystore "$KEYSTORE_PATH" \
-              -storepass "$KEYSTORE_PASS" \
-              -keypass "$KEY_PASS" \
-              "$APK_PATH" \
-              "$KEY_ALIAS"
-            
-            # Align the APK for optimal performance
-            echo "📐 Aligning APK..."
-            zipalign -v 4 "$APK_PATH" "$SIGNED_APK_PATH"
-            
-            echo "✅ APK signed and aligned successfully"
-            
-            # If auto-generated, save keystore info for user reference
-            if [ -z "$CM_KEYSTORE" ]; then
-              echo ""
-              echo "╔══════════════════════════════════════════════════════════════╗"
-              echo "║  ℹ️  AUTO-GENERATED KEYSTORE INFO                             ║"
-              echo "╠══════════════════════════════════════════════════════════════╣"
-              echo "║  This APK uses an auto-generated debug keystore.             ║"
-              echo "║  Perfect for testing and sideloading!                        ║"
-              echo "║                                                              ║"
-              echo "║  For Play Store publishing, add your own keystore:           ║"
-              echo "║  • CM_KEYSTORE (base64 encoded)                              ║"
-              echo "║  • CM_KEYSTORE_PASSWORD                                      ║"
-              echo "║  • CM_KEY_ALIAS                                              ║"
-              echo "║  • CM_KEY_PASSWORD                                           ║"
-              echo "╚══════════════════════════════════════════════════════════════╝"
-            fi
-          fi
-
-      # -----------------------------------------------------------------------
-      # STEP 9: Build AAB for Play Store
-      # -----------------------------------------------------------------------
-      - name: "Build Android App Bundle (AAB)"
-        script: |
-          echo "📦 Building Android App Bundle..."
-          cd android
-          
-          ./gradlew bundleRelease \
             -Dorg.gradle.jvmargs="-Xmx4g" \
             -Dorg.gradle.parallel=true \
             --no-daemon
           
-          echo "✅ Android App Bundle built"
+          APK_PATH="app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [ -f "$APK_PATH" ]; then
+            KEYSTORE_PASS="nativefy_${BUNDLE_ID//[^a-zA-Z0-9]/_}"
+            keytool -genkey -v \
+              -keystore release.keystore \
+              -alias nativefy \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KEYSTORE_PASS" \
+              -keypass "$KEYSTORE_PASS" \
+              -dname "CN=${APP_NAME}, O=Nativefy, C=US"
+            
+            jarsigner -verbose \
+              -sigalg SHA256withRSA -digestalg SHA-256 \
+              -keystore release.keystore \
+              -storepass "$KEYSTORE_PASS" \
+              -keypass "$KEYSTORE_PASS" \
+              "$APK_PATH" nativefy
+            
+            zipalign -v 4 "$APK_PATH" "app/build/outputs/apk/release/app-release.apk"
+          fi
 
     artifacts:
       - android/app/build/outputs/apk/release/*.apk
       - android/app/build/outputs/bundle/release/*.aab
-      - android/app/build/outputs/logs/*.txt
 
     publishing:
       scripts:
-        - name: "Build completion notification"
-          script: |
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║           ✅ ANDROID BUILD COMPLETE                          ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-            echo "📱 App: $APP_NAME"
-            echo "📦 Bundle ID: $BUNDLE_ID"
-            echo "🌐 Source: $SOURCE_URL"
-            echo ""
-            echo "Artifacts are ready for download!"
+        - name: "Done"
+          script: echo "✅ Build complete for $APP_NAME"
 
-  # ===========================================================================
-  # iOS WORKFLOW - Production Quality
-  # ===========================================================================
   ios-workflow:
-    name: "iOS Production Build"
-    instance_type: mac_mini
+    name: "iOS Build"
+    instance_type: mac_mini_m2
     max_build_duration: 90
     
     integrations:
-      app_store_connect: nativefy_asc  # App Store Connect API key
+      app_store_connect: nativefy_asc
     
     environment:
       xcode: latest
@@ -354,224 +142,47 @@ workflows:
         APP_NAME: ${APP_NAME}
         SOURCE_URL: ${SOURCE_URL}
         BUNDLE_ID: ${BUNDLE_ID}
-        PLATFORM: "ios"
 
     cache:
       <<: *cache
       
     scripts:
-      # -----------------------------------------------------------------------
-      # STEP 1: Validate Environment
-      # -----------------------------------------------------------------------
-      - name: "Validate build parameters"
+      - name: "Validate parameters"
         script: |
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║             NATIVEFY - iOS Build Starting                     ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "📱 App Name: $APP_NAME"
-          echo "🌐 Source URL: $SOURCE_URL"
-          echo "📦 Bundle ID: $BUNDLE_ID"
-          echo ""
-          
-          if [ -z "$SOURCE_URL" ]; then
-            echo "❌ ERROR: SOURCE_URL is required"
+          if [ -z "$SOURCE_URL" ] || [ -z "$APP_NAME" ]; then
             exit 1
           fi
-          
-          if [ -z "$APP_NAME" ]; then
-            echo "❌ ERROR: APP_NAME is required"
-            exit 1
-          fi
-          
-          echo "✅ All parameters validated"
 
-      # -----------------------------------------------------------------------
-      # STEP 2: Install Dependencies
-      # -----------------------------------------------------------------------
-      - name: "Install Node.js dependencies"
-        script: |
-          echo "📦 Installing dependencies..."
-          npm install --legacy-peer-deps
-          echo "✅ Dependencies installed"
+      - name: "Install dependencies"
+        script: npm install --legacy-peer-deps
 
-      # -----------------------------------------------------------------------
-      # STEP 3: Configure App Identity
-      # -----------------------------------------------------------------------
-      - name: "Configure app identity"
+      - name: "Configure Capacitor"
         script: |
-          echo "🎨 Configuring app identity..."
-          
           cat > capacitor.config.ts << EOF
           import { CapacitorConfig } from '@capacitor/cli';
-          
           const config: CapacitorConfig = {
             appId: '${BUNDLE_ID}',
             appName: '${APP_NAME}',
             webDir: 'dist',
-            bundledWebRuntime: false,
-            
             server: {
               url: '${SOURCE_URL}',
-              cleartext: false,
               iosScheme: 'https',
               allowNavigation: ['*']
-            },
-            
-            ios: {
-              contentInset: 'automatic',
-              allowsLinkPreview: true,
-              scrollEnabled: true,
-              limitsNavigationsToAppBoundDomains: false,
-              preferredContentMode: 'mobile'
-            },
-            
-            plugins: {
-              SplashScreen: {
-                launchShowDuration: 2000,
-                launchAutoHide: true,
-                backgroundColor: '#ffffff',
-                showSpinner: false,
-                splashFullScreen: true,
-                splashImmersive: true
-              },
-              StatusBar: {
-                style: 'dark'
-              },
-              Keyboard: {
-                resize: 'body',
-                resizeOnFullScreen: true
-              }
             }
           };
-          
           export default config;
           EOF
-          
-          echo "✅ App identity configured"
 
-      # -----------------------------------------------------------------------
-      # STEP 4: Build Web Assets
-      # -----------------------------------------------------------------------
-      - name: "Build optimized web assets"
-        script: |
-          echo "🏗️ Building web assets..."
-          npm run build
-          echo "✅ Web assets built"
+      - name: "Build web assets"
+        script: npm run build
 
-      # -----------------------------------------------------------------------
-      # STEP 5: Sync and Prepare iOS
-      # -----------------------------------------------------------------------
-      - name: "Sync Capacitor to iOS"
-        script: |
-          echo "🔄 Syncing Capacitor..."
-          npx cap sync ios --deployment
-          echo "✅ Capacitor synced"
+      - name: "Sync Capacitor"
+        script: npx cap sync ios --deployment
 
-      # -----------------------------------------------------------------------
-      # STEP 6: Install CocoaPods
-      # -----------------------------------------------------------------------
-      - name: "Install CocoaPods dependencies"
+      - name: "Install CocoaPods"
         script: |
-          echo "📦 Installing CocoaPods..."
           cd ios/App
           pod install --repo-update
-          echo "✅ CocoaPods installed"
 
-      # -----------------------------------------------------------------------
-      # STEP 7: Update iOS Project Settings
-      # -----------------------------------------------------------------------
-      - name: "Configure iOS project settings"
-        script: |
-          echo "⚙️ Configuring iOS project..."
-          cd ios/App
-          
-          # Update display name in Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" App/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" App/Info.plist
-          
-          echo "✅ iOS project configured"
-
-      # -----------------------------------------------------------------------
-      # STEP 8: Set Up Code Signing
-      # -----------------------------------------------------------------------
-      - name: "Set up iOS code signing"
-        script: |
-          echo "🔐 Setting up code signing..."
-          xcode-project use-profiles
-          echo "✅ Code signing configured"
-
-      # -----------------------------------------------------------------------
-      # STEP 9: Build iOS Archive
-      # -----------------------------------------------------------------------
-      - name: "Build iOS release archive"
-        script: |
-          echo "🔨 Building iOS archive..."
-          cd ios/App
-          
-          xcodebuild archive \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -archivePath build/App.xcarchive \
-            -destination 'generic/platform=iOS' \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$APPLE_PROVISIONING_PROFILE" \
-            -allowProvisioningUpdates \
-            | xcbeautify
-          
-          echo "✅ iOS archive created"
-
-      # -----------------------------------------------------------------------
-      # STEP 10: Export IPA
-      # -----------------------------------------------------------------------
-      - name: "Export IPA for distribution"
-        script: |
-          echo "📦 Exporting IPA..."
-          cd ios/App
-          
-          # Create export options plist
-          cat > exportOptions.plist << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>\${APPLE_TEAM_ID}</string>
-              <key>uploadSymbols</key>
-              <true/>
-              <key>compileBitcode</key>
-              <false/>
-          </dict>
-          </plist>
-          EOF
-          
-          xcodebuild -exportArchive \
-            -archivePath build/App.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist exportOptions.plist \
-            | xcbeautify
-          
-          echo "✅ IPA exported"
-
-    artifacts:
-      - ios/App/build/ipa/*.ipa
-      - ios/App/build/*.xcarchive
-      - ios/App/build/logs/*.txt
-
-    publishing:
-      scripts:
-        - name: "Build completion notification"
-          script: |
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║             ✅ iOS BUILD COMPLETE                            ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-            echo "📱 App: $APP_NAME"
-            echo "📦 Bundle ID: $BUNDLE_ID"
-            echo "🌐 Source: $SOURCE_URL"
-            echo ""
-            echo "IPA is ready for download or App Store submission!"
+      - name: "Configure iOS"
+        
