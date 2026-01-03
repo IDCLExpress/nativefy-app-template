@@ -80,9 +80,22 @@ workflows:
           </resources>
           EOF
 
-      - name: "Build web assets"
+      - name: "Prepare web assets"
         script: |
-          npm run build
+          echo "Using remote SOURCE_URL, skipping npm run build"
+          mkdir -p dist
+          cat > dist/index.html << 'EOF'
+          <!doctype html>
+          <html>
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>App</title>
+            </head>
+            <body></body>
+          </html>
+          EOF
+          echo "✅ dist/ prepared"
 
       - name: "Sync Capacitor"
         script: |
@@ -173,8 +186,22 @@ workflows:
           export default config;
           EOF
 
-      - name: "Build web assets"
-        script: npm run build
+      - name: "Prepare web assets"
+        script: |
+          echo "Using remote SOURCE_URL, skipping npm run build"
+          mkdir -p dist
+          cat > dist/index.html << 'EOF'
+          <!doctype html>
+          <html>
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>App</title>
+            </head>
+            <body></body>
+          </html>
+          EOF
+          echo "✅ dist/ prepared"
 
       - name: "Sync Capacitor"
         script: npx cap sync ios --deployment
@@ -185,4 +212,50 @@ workflows:
           pod install --repo-update
 
       - name: "Configure iOS"
-        
+        script: |
+          cd ios/App
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${APP_NAME}" App/Info.plist
+
+      - name: "Set up signing"
+        script: xcode-project use-profiles
+
+      - name: "Build iOS"
+        script: |
+          cd ios/App
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -archivePath build/App.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates
+
+      - name: "Export IPA"
+        script: |
+          cd ios/App
+          cat > exportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist exportOptions.plist
+
+    artifacts:
+      - ios/App/build/ipa/*.ipa
+      - ios/App/build/*.xcarchive
+
+    publishing:
+      scripts:
+        - name: "Done"
+          script: echo "✅ iOS build complete for $APP_NAME"
